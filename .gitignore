@@ -20,8 +20,8 @@ __pycache__/
 # data/raw/
 
 # Output data / generated artifacts (keep structure, ignore contents if needed)
-outputs/
-graphs/
+# outputs/
+# graphs/
 
 # OS files
 .DS_Store
