@@ -17,7 +17,7 @@ __pycache__/
 *.zip
 
 # Raw dataset (has its own git repo — add as submodule if needed)
-data/raw/
+# data/raw/
 
 # Output data / generated artifacts (keep structure, ignore contents if needed)
 outputs/
