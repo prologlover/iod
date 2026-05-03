@@ -1,0 +1,37 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Large archive files
+*.zip
+
+# Raw dataset (has its own git repo — add as submodule if needed)
+data/raw/
+
+# Output data / generated artifacts (keep structure, ignore contents if needed)
+outputs/
+graphs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Byte-compiled / optimized
+*.egg-info/
+dist/
+build/
