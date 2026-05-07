@@ -7,9 +7,11 @@ including per-attack-type breakdowns and ROC-AUC.
 import numpy as np
 from sklearn.metrics import (
     accuracy_score,
+    balanced_accuracy_score,
     precision_score,
     recall_score,
     f1_score,
+    matthews_corrcoef,
     roc_auc_score,
     confusion_matrix,
     classification_report,
@@ -43,10 +45,18 @@ def calculate_metrics(
     """
     metrics = {
         "accuracy": accuracy_score(y_true, y_pred),
+        "balanced_accuracy": balanced_accuracy_score(y_true, y_pred),
         "precision": precision_score(y_true, y_pred, zero_division=0),
         "recall": recall_score(y_true, y_pred, zero_division=0),
         "f1": f1_score(y_true, y_pred, zero_division=0),
+        "mcc": matthews_corrcoef(y_true, y_pred),
     }
+
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+    metrics["specificity"] = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    metrics["fpr"] = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+    metrics["fnr"] = fn / (fn + tp) if (fn + tp) > 0 else 0.0
 
     if y_prob is not None and len(np.unique(y_true)) > 1:
         try:

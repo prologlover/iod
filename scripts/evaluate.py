@@ -13,6 +13,7 @@ Usage
 import argparse
 import sys
 from pathlib import Path
+from typing import Dict, List
 
 import json
 
@@ -63,15 +64,16 @@ def load_threshold(threshold_path: Path, default: float = 0.5) -> float:
     return default
 
 
-def main(attack_type: str = "false_state", graph_type: str = "knn",
-         threshold: float = 0.5, n_snapshots: int = None):
-    logger.info("=" * 60)
-    logger.info("STAGE 7: Evaluation")
-    logger.info(f"  attack_type = {attack_type}")
-    logger.info(f"  graph_type  = {graph_type}")
-    logger.info("=" * 60)
+def _evaluate_once(
+    attack_type: str,
+    graph_type: str,
+    threshold: float,
+    n_snapshots: int,
+    eval_seed: int,
+) -> Dict[str, Dict[str, float]]:
+    rng = np.random.default_rng(eval_seed)
 
-    rng = np.random.default_rng(SEED)
+    logger.info(f"Running single evaluation with seed={eval_seed}")
 
     logger.info("Loading and preprocessing data...")
     raw_df = load_and_merge()
@@ -150,27 +152,84 @@ def main(attack_type: str = "false_state", graph_type: str = "knn",
         y_pred = (y_prob >= t).astype(int)
         all_metrics[model_name] = calculate_metrics(y_true, y_pred, y_prob)
         all_metrics[model_name]["threshold"] = t
-        plot_confusion_matrix(y_true, y_pred, model_name, save_prefix=attack_type)
+        plot_confusion_matrix(y_true, y_pred, model_name, save_prefix=f"{attack_type}_seed{eval_seed}")
 
-    plot_roc_curves(raw_predictions, save_prefix=attack_type)
-    plot_pr_curves(raw_predictions, save_prefix=attack_type)
-    save_json(all_metrics, TABLE_DIR / f"{attack_type}_metrics.json")
+    plot_roc_curves(raw_predictions, save_prefix=f"{attack_type}_seed{eval_seed}")
+    plot_pr_curves(raw_predictions, save_prefix=f"{attack_type}_seed{eval_seed}")
+    save_json(all_metrics, TABLE_DIR / f"{attack_type}_metrics_seed{eval_seed}.json")
+    return all_metrics
+
+
+def _aggregate_metrics(seed_metrics: List[Dict[str, Dict[str, float]]]) -> Dict[str, Dict[str, float]]:
+    model_names = seed_metrics[0].keys()
+    aggregated = {}
+    for model_name in model_names:
+        metric_names = seed_metrics[0][model_name].keys()
+        aggregated[model_name] = {}
+        for metric_name in metric_names:
+            vals = [m[model_name][metric_name] for m in seed_metrics]
+            aggregated[model_name][metric_name] = float(np.mean(vals))
+            aggregated[model_name][f"{metric_name}_std"] = float(np.std(vals))
+    return aggregated
+
+
+def main(attack_type: str = "false_state", graph_type: str = "knn",
+         threshold: float = 0.5, n_snapshots: int = None, eval_seeds: int = 1):
+    logger.info("=" * 60)
+    logger.info("STAGE 7: Evaluation")
+    logger.info(f"  attack_type = {attack_type}")
+    logger.info(f"  graph_type  = {graph_type}")
+    logger.info("=" * 60)
+
+    eval_seed_values = [SEED + i for i in range(eval_seeds)]
+    all_runs = [
+        _evaluate_once(
+            attack_type=attack_type,
+            graph_type=graph_type,
+            threshold=threshold,
+            n_snapshots=n_snapshots,
+            eval_seed=s,
+        )
+        for s in eval_seed_values
+    ]
+
+    from src.config import TABLE_DIR
+    from src.utils import save_json
+
+    all_metrics = _aggregate_metrics(all_runs) if eval_seeds > 1 else all_runs[0]
+    out_name = f"{attack_type}_metrics_seedavg.json" if eval_seeds > 1 else f"{attack_type}_metrics.json"
+    save_json(all_metrics, TABLE_DIR / out_name)
 
     # Print summary table
     header = (
         f"\n{'Model':<20}  {'Threshold':>9}  {'Accuracy':>9}  "
-        f"{'Precision':>9}  {'Recall':>9}  {'F1':>9}  {'ROC-AUC':>9}"
+        f"{'Precision':>9}  {'Recall':>9}  {'F1':>9}  {'ROC-AUC':>9}  {'FPR':>9}"
     )
     logger.info(header)
     logger.info("-" * len(header))
     for name, m in all_metrics.items():
+        if eval_seeds > 1:
+            acc_txt = f"{m.get('accuracy', 0):.4f}±{m.get('accuracy_std', 0):.4f}"
+            prec_txt = f"{m.get('precision', 0):.4f}±{m.get('precision_std', 0):.4f}"
+            rec_txt = f"{m.get('recall', 0):.4f}±{m.get('recall_std', 0):.4f}"
+            f1_txt = f"{m.get('f1', 0):.4f}±{m.get('f1_std', 0):.4f}"
+            auc_txt = f"{m.get('roc_auc', 0):.4f}±{m.get('roc_auc_std', 0):.4f}"
+            fpr_txt = f"{m.get('fpr', 0):.4f}±{m.get('fpr_std', 0):.4f}"
+        else:
+            acc_txt = f"{m.get('accuracy', 0):.4f}"
+            prec_txt = f"{m.get('precision', 0):.4f}"
+            rec_txt = f"{m.get('recall', 0):.4f}"
+            f1_txt = f"{m.get('f1', 0):.4f}"
+            auc_txt = f"{m.get('roc_auc', 0):.4f}"
+            fpr_txt = f"{m.get('fpr', 0):.4f}"
         logger.info(
             f"{name:<20}  {m.get('threshold', 0.5):>9.3f}  "
-            f"{m.get('accuracy', 0):>9.4f}  "
-            f"{m.get('precision', 0):>9.4f}  "
-            f"{m.get('recall', 0):>9.4f}  "
-            f"{m.get('f1', 0):>9.4f}  "
-            f"{m.get('roc_auc', 0):>9.4f}"
+            f"{acc_txt:>9}  "
+            f"{prec_txt:>9}  "
+            f"{rec_txt:>9}  "
+            f"{f1_txt:>9}  "
+            f"{auc_txt:>9}  "
+            f"{fpr_txt:>9}"
         )
 
     logger.info("\nEvaluation complete.")
@@ -184,6 +243,8 @@ if __name__ == "__main__":
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--snapshots", type=int, default=None,
                         help="Total swarm snapshots (derives test split from this).")
+    parser.add_argument("--eval_seeds", type=int, default=1,
+                        help="Number of evaluation seeds. >1 reports mean±std.")
     args = parser.parse_args()
 
     main(
@@ -191,4 +252,5 @@ if __name__ == "__main__":
         graph_type=args.graph_type,
         threshold=args.threshold,
         n_snapshots=args.snapshots,
+        eval_seeds=args.eval_seeds,
     )

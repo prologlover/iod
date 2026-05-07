@@ -144,14 +144,16 @@ def run_preprocessing(df: pd.DataFrame):
         # 1. Missing values
         df = handle_missing_values(df)
 
-        # 2. Encode labels (before normalisation so we have the label column)
+        # 2. Encode labels
         df, le = encode_labels(df)
 
-        # 3. Normalise
-        df, scaler = normalise_features(df)
-
-        # 4. Split
+        # 3. Split first to avoid train/test leakage in scaling statistics
         train_df, val_df, test_df = split_data(df)
+
+        # 4. Normalise using training-only fit, then transform val/test
+        train_df, scaler = normalise_features(train_df, fit=True)
+        val_df, _ = normalise_features(val_df, fit=False, scaler=scaler)
+        test_df, _ = normalise_features(test_df, fit=False, scaler=scaler)
 
         # 5. Save to disk
         train_df.to_parquet(PROCESSED_DATA_DIR / "train.parquet", index=False)
@@ -160,7 +162,7 @@ def run_preprocessing(df: pd.DataFrame):
         logger.info(f"Processed data saved to {PROCESSED_DATA_DIR}")
 
         meta_cols = ["attack_type", "is_attack", "domain", "label"]
-        feature_cols = [c for c in df.columns if c not in meta_cols]
+        feature_cols = [c for c in train_df.columns if c not in meta_cols]
 
     return {
         "train_df": train_df,
