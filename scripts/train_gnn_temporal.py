@@ -66,8 +66,8 @@ def train_epoch(model, seqs, optimizer, criterion):
 
 @torch.no_grad()
 def eval_epoch(model, seqs, criterion):
-    """Returns (avg_loss, val_f1)."""
-    from sklearn.metrics import f1_score
+    """Returns (avg_loss, val_f1_best, val_best_threshold)."""
+    from models.model_utils import find_best_threshold
 
     model.eval()
     total_loss, n_batches = 0.0, 0
@@ -86,9 +86,10 @@ def eval_epoch(model, seqs, criterion):
         all_probs.extend(probs.tolist())
 
     avg_loss = total_loss / max(1, n_batches)
-    y_pred = (np.array(all_probs) >= 0.5).astype(int)
-    val_f1 = float(f1_score(np.array(all_labels), y_pred, zero_division=0))
-    return avg_loss, val_f1
+    y_true = np.array(all_labels)
+    y_prob = np.array(all_probs)
+    best_t, val_f1_best = find_best_threshold(y_true, y_prob)
+    return avg_loss, val_f1_best, best_t
 
 
 def main(
@@ -154,22 +155,23 @@ def main(
     # Use F1 (higher = better) to drive early stopping instead of loss
     early_stop = EarlyStopping(patience=PATIENCE, checkpoint_path=checkpoint, mode="max")
 
-    history = {"train_loss": [], "val_loss": [], "val_f1": []}
+    history = {"train_loss": [], "val_loss": [], "val_f1": [], "val_best_threshold": []}
 
     logger.info("Starting training...")
     for epoch in range(1, epochs + 1):
         t_loss = train_epoch(model, train_seqs, optimizer, criterion)
-        v_loss, v_f1 = eval_epoch(model, val_seqs, criterion)
+        v_loss, v_f1, v_t = eval_epoch(model, val_seqs, criterion)
         scheduler.step()
 
         history["train_loss"].append(t_loss)
         history["val_loss"].append(v_loss)
         history["val_f1"].append(v_f1)
+        history["val_best_threshold"].append(v_t)
 
         logger.info(
             f"Epoch {epoch:03d}/{epochs} | "
             f"Train Loss: {t_loss:.4f} | Val Loss: {v_loss:.4f} | "
-            f"Val F1: {v_f1:.4f} | LR: {scheduler.get_last_lr()[0]:.2e}"
+            f"Val F1(best-th): {v_f1:.4f} | Best-th: {v_t:.3f} | LR: {scheduler.get_last_lr()[0]:.2e}"
         )
 
         if early_stop.step(v_f1, model):

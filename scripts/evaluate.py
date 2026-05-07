@@ -39,6 +39,7 @@ from models.lstm import LSTMModel
 from models.cnn import CNNModel
 from models.gcn import GCNModel
 from evaluation.evaluator import run_evaluation, predict_gnn, predict_baseline
+from models.model_utils import find_best_threshold
 
 logger = get_logger(__name__)
 
@@ -84,7 +85,11 @@ def _evaluate_once(
 
     total = n_snapshots if n_snapshots else NUM_SWARM_SNAPSHOTS
     n_test = max(50, int(total * 0.15))
-    logger.info(f"Generating {n_test} test sequences...")
+    n_val = max(25, int(total * 0.15))
+    logger.info(f"Generating {n_val} validation and {n_test} test sequences...")
+    val_tab = generate_swarm_dataset(prep["val_df"], feature_cols, n_val, seed=rng.integers(10_000))
+    val_pyg = build_temporal_graphs(val_tab, graph_type=graph_type)
+    val_seqs = inject_attacks(val_pyg, attack_type, rng)
     test_tab = generate_swarm_dataset(test_df, feature_cols, n_test, seed=rng.integers(10_000))
     test_pyg = build_temporal_graphs(test_tab, graph_type=graph_type)
     test_seqs = inject_attacks(test_pyg, attack_type, rng)
@@ -117,17 +122,15 @@ def _evaluate_once(
         GCNModel(in_channels=num_features, hidden_dim=HIDDEN_DIM, dropout=DROPOUT),
     )
 
-    # Load per-model optimal thresholds (saved during training); fall back to CLI value
-    thresholds = {
-        "GAT+GRU":       load_threshold(MODEL_DIR / "threshold_gat_temporal.json",      threshold),
-        "GraphSAGE+GRU": load_threshold(MODEL_DIR / "threshold_graphsage_temporal.json", threshold),
-        "MLP":           load_threshold(MODEL_DIR / "threshold_mlp.json",                threshold),
-        "LSTM":          load_threshold(MODEL_DIR / "threshold_lstm.json",               threshold),
-        "1D-CNN":        load_threshold(MODEL_DIR / "threshold_cnn.json",                threshold),
-        "GCN":           load_threshold(MODEL_DIR / "threshold_gcn.json",                threshold),
-    }
-
     logger.info("Running inference...")
+    raw_val_predictions = {
+        "GAT+GRU":       predict_gnn(gat_model, val_seqs),
+        "GraphSAGE+GRU": predict_gnn(graphsage_model, val_seqs),
+        "MLP":           predict_baseline(mlp_model, val_seqs, "mlp"),
+        "LSTM":          predict_baseline(lstm_model, val_seqs, "lstm"),
+        "1D-CNN":        predict_baseline(cnn_model, val_seqs, "cnn"),
+        "GCN":           predict_baseline(gcn_model, val_seqs, "gcn"),
+    }
     raw_predictions = {
         "GAT+GRU":       predict_gnn(gat_model, test_seqs),
         "GraphSAGE+GRU": predict_gnn(graphsage_model, test_seqs),
@@ -136,6 +139,12 @@ def _evaluate_once(
         "1D-CNN":        predict_baseline(cnn_model, test_seqs, "cnn"),
         "GCN":           predict_baseline(gcn_model, test_seqs, "gcn"),
     }
+
+    thresholds = {}
+    for model_name, (y_true_val, y_prob_val) in raw_val_predictions.items():
+        best_t, _ = find_best_threshold(y_true_val, y_prob_val)
+        thresholds[model_name] = best_t
+        logger.info(f"{model_name}: calibrated val threshold = {best_t:.3f}")
 
     logger.info("Computing metrics and generating plots...")
     # run_evaluation accepts a single global threshold; we compute per-model metrics ourselves

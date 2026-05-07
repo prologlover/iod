@@ -84,8 +84,8 @@ def train_epoch(model, seqs, optimizer, criterion, model_type):
 
 @torch.no_grad()
 def eval_epoch(model, seqs, criterion, model_type):
-    """Returns (avg_loss, val_f1) over the validation sequences."""
-    from sklearn.metrics import f1_score
+    """Returns (avg_loss, val_f1_best, val_best_threshold) over validation sequences."""
+    from models.model_utils import find_best_threshold
 
     model.eval()
     total_loss = 0.0
@@ -123,10 +123,8 @@ def eval_epoch(model, seqs, criterion, model_type):
 
     y_true = np.array(all_labels)
     y_prob = np.array(all_probs)
-    y_pred = (y_prob >= 0.5).astype(int)
-    val_f1 = float(f1_score(y_true, y_pred, zero_division=0))
-
-    return avg_loss, val_f1
+    best_t, val_f1_best = find_best_threshold(y_true, y_prob)
+    return avg_loss, val_f1_best, best_t
 
 
 def build_model(model_type: str, num_features: int):
@@ -176,7 +174,7 @@ def train_model(model_type: str, train_seqs, val_seqs, num_features: int, epochs
     # Use F1 (higher = better) to drive early stopping instead of loss
     early_stop = EarlyStopping(patience=PATIENCE, checkpoint_path=checkpoint, mode="max")
 
-    history = {"train_loss": [], "val_loss": [], "val_f1": []}
+    history = {"train_loss": [], "val_loss": [], "val_f1": [], "val_best_threshold": []}
 
     logger.info(f"\n{'='*60}")
     logger.info(f"Training: {model_type.upper()}")
@@ -184,14 +182,15 @@ def train_model(model_type: str, train_seqs, val_seqs, num_features: int, epochs
 
     for epoch in range(1, epochs + 1):
         t_loss = train_epoch(model, train_seqs, optimizer, criterion, model_type)
-        v_loss, v_f1 = eval_epoch(model, val_seqs, criterion, model_type)
+        v_loss, v_f1, v_t = eval_epoch(model, val_seqs, criterion, model_type)
         history["train_loss"].append(t_loss)
         history["val_loss"].append(v_loss)
         history["val_f1"].append(v_f1)
+        history["val_best_threshold"].append(v_t)
 
         logger.info(
             f"Epoch {epoch:03d} | Train Loss: {t_loss:.4f} | "
-            f"Val Loss: {v_loss:.4f} | Val F1: {v_f1:.4f}"
+            f"Val Loss: {v_loss:.4f} | Val F1(best-th): {v_f1:.4f} | Best-th: {v_t:.3f}"
         )
 
         if early_stop.step(v_f1, model):
